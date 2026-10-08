@@ -1,0 +1,20 @@
+{
+  "name": "open-manus-forge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local-first open-source agent workspace with skills, connectors, policies, and GGUF-friendly model adapters.",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx apps/server/src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5"
+  }
+}
