@@ -1,0 +1,9 @@
+{
+  "id": "example-http",
+  "name": "Example HTTP connector",
+  "transport": "http",
+  "capabilities": ["network.read"],
+  "requiresSecrets": false,
+  "mutatesData": false,
+  "approval": "always"
+}
