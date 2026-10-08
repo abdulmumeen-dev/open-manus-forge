@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.open-manus/
+.env
+models/
+*.log
