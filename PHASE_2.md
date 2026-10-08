@@ -10,7 +10,7 @@ This slice turns the foundation into a usable local workspace.
 - JSONL event recording under `.open-manus/events.jsonl`.
 - Event timeline endpoint at `/v1/events`.
 - Workspace-bounded file read tool.
-- Approval-gated file write tool.
+- Approval-gated file write tool with pending approval IDs and an explicit approval endpoint.
 - Runtime status, model, skill, and connector summaries.
 
 ## Run locally
@@ -45,8 +45,7 @@ The runtime does not execute shell commands, store provider keys in the browser,
 
 ## Next milestones
 
-1. Add an explicit approval token endpoint and UI prompt.
-2. Add streaming responses and cancellation.
+1. Add streaming responses and cancellation.
 3. Add a Tauri shell that starts/stops the local server.
 4. Add model import metadata and a GGUF setup assistant.
 5. Add connector health checks and signed community manifests.

@@ -4,7 +4,7 @@ An open-source, local-first agent workspace for building useful things with AI.
 
 Open Manus Forge is designed as a **modular alternative to closed agent workspaces**. It combines a chat interface, tool-using agent runtime, reusable skills, MCP-style connectors, local model support, and a desktop shell without requiring one vendor or one model provider.
 
-> This repository is an early foundation. It is not a claim that a complete Manus replacement already exists.
+> The repository now contains a complete runnable local-first MVP. It is not intended to claim feature parity with a hosted commercial platform.
 
 ## What it is meant to become
 
@@ -16,7 +16,7 @@ Open Manus Forge is designed as a **modular alternative to closed agent workspac
 - **Desktop app:** a cross-platform shell that talks to the same local server as the CLI and future web client.
 - **Community projects:** a registry of skills, connectors, recipes, and problem-solving tools with review and permission metadata.
 
-## Current foundation
+## Runnable MVP
 
 This first slice contains:
 
@@ -25,8 +25,12 @@ This first slice contains:
 - A skill loader with frontmatter and progressive disclosure.
 - A connector registry with permission declarations.
 - A policy engine for approval gates and workspace boundaries.
-- A small HTTP server exposing health, models, skills, connectors, and a chat endpoint.
-- A desktop-shell plan based on Tauri/Electron-style separation, so the UI never owns the agent logic.
+- A local HTTP server exposing health, models, skills, connectors, streaming chat, events, and approvals.
+- A browser desktop shell with streaming responses, cancellation, and approval controls.
+- A Node desktop launcher that starts the local server and opens the shell.
+- GGUF catalog registration through `POST /v1/models/register`.
+- Connector health inspection through `GET /v1/connectors/health`.
+- Deterministic MVP tests for policy gates and GGUF registration.
 
 ## Architecture
 
@@ -59,6 +63,18 @@ npm run dev
 
 The server starts on `http://127.0.0.1:8787`.
 
+To launch the browser desktop shell automatically:
+
+```bash
+npm run desktop
+```
+
+Run the deterministic MVP tests with:
+
+```bash
+npm run build && npm test
+```
+
 Check the runtime:
 
 ```bash
@@ -66,6 +82,15 @@ curl http://127.0.0.1:8787/health
 curl http://127.0.0.1:8787/v1/models
 curl http://127.0.0.1:8787/v1/skills
 curl http://127.0.0.1:8787/v1/connectors
+curl http://127.0.0.1:8787/v1/connectors/health
+```
+
+Register GGUF metadata after placing a model in `models/`:
+
+```bash
+curl -X POST http://127.0.0.1:8787/v1/models/register \
+  -H 'content-type: application/json' \
+  -d '{"filename":"your-model.gguf","architecture":"llama","contextLength":8192}'
 ```
 
 ## Local model configuration
