@@ -5,6 +5,8 @@ import { decide } from '../../packages/core/src.js';
 
 type ProviderReply = { text: string; provider: string; model: string; raw?: unknown };
 type RuntimeOptions = { workspaceRoot: string; eventsPath: string; policy: Policy };
+type PendingWrite = { id: string; path: string; content: string; createdAt: string };
+const pendingWrites = new Map<string, PendingWrite>();
 
 function record(eventsPath: string, event: Record<string, unknown>) {
   mkdirSync(dirname(eventsPath), { recursive: true });
@@ -15,14 +17,24 @@ async function providerChat(input: ChatRequest): Promise<ProviderReply> {
   const provider = process.env.OPEN_MANUS_PROVIDER ?? 'ollama';
   const model = input.model ?? process.env.OPEN_MANUS_MODEL ?? 'llama3.2';
   const baseUrl = (process.env.OPEN_MANUS_BASE_URL ?? 'http://127.0.0.1:11434').replace(/\/$/, '');
-  const prompt = input.mode === 'plan' ? `You are a careful local planning assistant. Return a short numbered plan and list any risks.\n\n${input.message}` : input.message;
+  const prompt = input.mode === 'plan'
+    ? `You are a careful local planning assistant. Return a short numbered plan and list any risks.\n\n${input.message}`
+    : input.message;
+
   if (provider === 'ollama') {
-    const response = await fetch(`${baseUrl}/api/chat`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model, stream: false, messages: [{ role: 'user', content: prompt }] }) });
+    const response = await fetch(`${baseUrl}/api/chat`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model, stream: false, messages: [{ role: 'user', content: prompt }] })
+    });
     if (!response.ok) throw new Error(`Ollama returned ${response.status}`);
     const data = await response.json() as { message?: { content?: string } };
     return { text: data.message?.content ?? '', provider, model, raw: data };
   }
-  const response = await fetch(`${baseUrl}/chat/completions`, { method: 'POST', headers: { 'content-type': 'application/json', ...(process.env.OPEN_MANUS_API_KEY ? { authorization: `Bearer ${process.env.OPEN_MANUS_API_KEY}` } : {}) }, body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }] }) });
+
+  const response = await fetch(`${baseUrl}/chat/completions`, {
+    method: 'POST', headers: { 'content-type': 'application/json', ...(process.env.OPEN_MANUS_API_KEY ? { authorization: `Bearer ${process.env.OPEN_MANUS_API_KEY}` } : {}) },
+    body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }] })
+  });
   if (!response.ok) throw new Error(`OpenAI-compatible endpoint returned ${response.status}`);
   const data = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
   return { text: data.choices?.[0]?.message?.content ?? '', provider, model, raw: data };
@@ -38,6 +50,42 @@ export async function runChat(input: ChatRequest, options: RuntimeOptions) {
     const message = error instanceof Error ? error.message : String(error);
     record(options.eventsPath, { type: 'chat.error', error: message });
     return { text: 'The local model is not reachable yet. Configure Ollama or an OpenAI-compatible endpoint in .env.', provider: 'unavailable', model: input.model ?? 'not-configured', status: 'adapter-error' as const, error: message };
+  }
+}
+
+export async function streamChat(input: ChatRequest, options: RuntimeOptions, signal: AbortSignal, onToken: (text: string) => void) {
+  const provider = process.env.OPEN_MANUS_PROVIDER ?? 'ollama';
+  const model = input.model ?? process.env.OPEN_MANUS_MODEL ?? 'llama3.2';
+  const baseUrl = (process.env.OPEN_MANUS_BASE_URL ?? 'http://127.0.0.1:11434').replace(/\/$/, '');
+  const prompt = input.mode === 'plan' ? `You are a careful local planning assistant. Return a short numbered plan and list any risks.\n\n${input.message}` : input.message;
+  const url = provider === 'ollama' ? `${baseUrl}/api/chat` : `${baseUrl}/chat/completions`;
+  const headers = { 'content-type': 'application/json', ...(process.env.OPEN_MANUS_API_KEY ? { authorization: `Bearer ${process.env.OPEN_MANUS_API_KEY}` } : {}) };
+  const response = await fetch(url, { method: 'POST', headers, signal, body: JSON.stringify({ model, stream: true, messages: [{ role: 'user', content: prompt }] }) });
+  if (!response.ok || !response.body) throw new Error(`${provider} streaming endpoint returned ${response.status}`);
+  record(options.eventsPath, { type: 'chat.stream.start', provider, model });
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      buffer += decoder.decode(next.value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
+      for (const line of lines) {
+        const raw = line.replace(/^data:\s*/, '').trim();
+        if (!raw || raw === '[DONE]') continue;
+        try {
+          const data = JSON.parse(raw) as { message?: { content?: string }; choices?: Array<{ delta?: { content?: string } }> };
+          const text = data.message?.content ?? data.choices?.[0]?.delta?.content ?? '';
+          if (text) onToken(text);
+        } catch { /* Ignore provider keep-alive fragments. */ }
+      }
+    }
+    record(options.eventsPath, { type: 'chat.stream.end', provider, model });
+  } finally {
+    reader.releaseLock();
   }
 }
 
@@ -58,11 +106,32 @@ export function executeWriteFile(path: string, content: string, options: Runtime
   const call: ToolCall = { name: 'filesystem.write', input: { path }, risk: 'high' };
   const decision = decide(options.policy, call);
   if (!decision.allowed) throw new Error(decision.reason);
-  if (decision.requiresApproval) return { approvalRequired: true, reason: decision.reason, path };
+  if (decision.requiresApproval) {
+    const id = `approval-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    pendingWrites.set(id, { id, path, content, createdAt: new Date().toISOString() });
+    record(options.eventsPath, { type: 'approval.requested', id, tool: call.name, input: { path } });
+    return { approvalRequired: true, approvalId: id, reason: decision.reason, path };
+  }
   mkdirSync(dirname(target), { recursive: true });
   writeFileSync(target, content);
   record(options.eventsPath, { type: 'tool.result', tool: call.name, input: { path }, bytes: content.length });
   return { approvalRequired: false, path };
+}
+
+export function listPendingWrites() {
+  return [...pendingWrites.values()].map(({ id, path, createdAt }) => ({ id, path, createdAt }));
+}
+
+export function approveWrite(id: string, options: RuntimeOptions) {
+  const pending = pendingWrites.get(id);
+  if (!pending) throw new Error('Approval not found or already resolved');
+  const target = resolve(options.workspaceRoot, pending.path);
+  if (!target.startsWith(options.workspaceRoot)) throw new Error('Workspace boundary violation');
+  mkdirSync(dirname(target), { recursive: true });
+  writeFileSync(target, pending.content);
+  pendingWrites.delete(id);
+  record(options.eventsPath, { type: 'approval.granted', id, tool: 'filesystem.write', input: { path: pending.path }, bytes: pending.content.length });
+  return { approved: true, id, path: pending.path };
 }
 
 export function readEvents(eventsPath: string) {
